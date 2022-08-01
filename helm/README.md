@@ -2,6 +2,6 @@
 
 - [文档首页](Docs-Home.md)
 - [基础教程]
-    - [快速开始](基础教程/快速开始.md)
-    - [安装 helm](基础教程/安装-helm.md)
-    - [使用 helm](基础教程/使用-helm.md)
+    - [快速开始](Introduction/Quickstart-Guide.md)
+    - [安装 helm](Introduction/Installing-Helm.md)
+    - [使用 helm](Introduction/Using-Helm.md)
