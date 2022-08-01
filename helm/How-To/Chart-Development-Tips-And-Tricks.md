@@ -179,6 +179,58 @@ spec:
 [...]
 ```
 
+每次模板函数的调用都会生成一个唯一的随机字符串。这意味着，如果需要在不同的资源中同步这些字符串，所有相关的资源都需要放到同一个模板文件中。
+
+这两种方法都允许您在部署的时候，利用内置的更新策略逻辑来避免停机。
+
+注意：过去我们建议使用 `--recreate-pods` 参数作为另一个选项。为了支持更具声明性的方法，这个参数在 helm 3 已经标记为废弃。
+
+## 告诉 helm 不要卸载资源
+
+有时候有一些资源不应该在运行 `helm uninstall` 时被卸载。chart 开发者可以添加一个资源注解（annotation）来防止被卸载。
+
+```
+kind: Secret
+metadata:
+  annotations:
+    "helm.sh/resource-policy": keep
+[...]
+```
+
+这个注解 `"helm.sh/resource-policy": keep` 告诉 helm 跳过会造成这个资源被删除的操作（比如 `helm uninstall`，`helm upgrade`，`helm rollback`）。然而，这个资源会变成孤立的。helm 不能再管理它。如果在一个已经卸载但是保留了资源的 release 上使用 `helm install --replace` 可能会导致问题。
+
+## 使用 “Partials” 和模板引用
+
+有时候你想要在 chart 里面创建一些可以复用的部分，无论它们是块还是模板部分。并且通常，他们将它们放到它们自己的文件中会更整洁。
+
+在 `templates/` 目录中，任何以下划线（`_`）开头的文件都不应该输出 kubernetes 清单文件。所以辅助模板和partials 都放到一个名为 `_helpers.tpl` 文件中
+
+## 很多依赖的复杂 chart
+
+很多 CNCF [Artifact Hub](https://artifacthub.io/packages/search?kind=0) 上的 chart 都是用于创建高级应用的 “构建块”。但是 chart 可能会被用来创建大规模应用实例。这种情况下，一个大的 chart 可能会有多个子 chart，每个是整体功能的一部分。
+
+现在从离散的部分组成一个复杂应用的最佳实践是创建一个顶层的总的 chart 暴露全局的配置，然后使用在子目录 `charts` 中嵌入每一个组件。
+
+## Yaml 是 Json 的超集
+
+根据 Yaml 的说明，Yaml 是 Json 的一个超集。这意味着任何有效的 Json 结构在 Yaml 中同样有效。
+
+这就带来了一个优势：有时候模板开发者会发现在描述一些数据结构的时候使用类似 Json 的语法会比使用空白敏感的 Yaml 更加容易。
+
+作为最佳事件，模板应该遵循 Yaml 风格的语法，除非 Json 语法可以大大降低格式问题的风险。
+
+## 小心生成随机值
+
+helm 中有很多方法允许你生成随机的数据，加密秘钥等等。这些使用起来都很好。但是需要注意升级的时候，模板会被重新执行。当一个模板运行生成的数据和上次运行不一样时，将会出发一个资源的更新。
+
+## 一条命令安装或更新 release
+
+helm 提供了一条命令来操作安装或者升级。使用 `helm upgrade` 和 `--install` 命令。这会导致 helm 去检查 release 是不是已经安装。如果没有，就会执行安装。如果已经安装，就会执行升级。
+
+```
+$ helm upgrade --install <release name> --values <values file> <chart directory>
+```
+
 ## 链接
 
 - Chart Development Tips and TricksL: <https://helm.sh/docs/howto/charts_tips_and_tricks/>
