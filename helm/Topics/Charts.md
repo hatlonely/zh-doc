@@ -91,8 +91,434 @@ annotations:
 
 ### appVersion
 
-注意 `appVersion` 字段和 `version` 字段没有关系。它是一种指定应用版本的方式。举例来说，`drupal` chart 有一个 app 版本 `appVersion: "8.2.1"`，表明 chart 中（默认情况下）的 drupal 的版本是 8.2.1。这个字段是一个描述性的信息，不影响 chart 版本的计算。
+注意 `appVersion` 字段和 `version` 字段没有关系。它是一种指定应用版本的方式。举例来说，`drupal` chart 有一个 app 版本 `appVersion: "8.2.1"`，表明 chart 中（默认情况下）的 drupal 的版本是 8.2.1。这个字段是一个描述性的信息，不影响 chart 版本的计算。强烈建议用引号将版本引起来。它能强制 Yaml 解析器将版本号当成一个字符串。不加引号在一些场景下可能会导致一些问题。比如，Yaml 会将 `1.0` 当成浮点数来处理，一个 git commit SHA 比如 `1234e10` 会被当成科学计数法。
 
-### dependencies
+helm v3.5.0 以后，`helm create` 默认会将 `appVersion` 字段用引号引起来。
+
+### kubeVersion
+
+可选字段 `kubeVersion` 可以定义支持的 kubernetes 版本约束。helm 会在安装 chart 的时候检查版本约束，并且在不支持的 kubernetes 版本中运行会失败。
+
+版本约束包含空白分隔和比较运算符，比如
+
+```
+>= 1.13.0 < 1.15.0
+```
+
+他们自身可以通过或运算符（`||`）组合起来，就像下面这样
+
+```
+>= 1.13.0 < 1.14.0 || >= 1.14.1 < 1.15.0
+```
+
+在这个例子中，版本号 `1.14.0` 是不包含的，如果已知某些版本有 bug 导致 chart 不能正常运行，这是很有意义的。
+
+除了版本约束外，使用运算符（`=`，`!=`，`>`，`<`，`>=`，`<=`）支持以下速记符号。
+
+- 连字符（`-`）连接闭合区间吗，`1.1-2.3.4` 相当于 `>= 1.1 <= 2.3.4`
+- 通配符 `x`，`X` 和 `*`，`1.2.x` 相当于 `>= 1.2.0 < 1.3.0`
+- 波浪号（`~`）（允许补丁版本），`~1.2.3` 相当于 `>= 1.2.3 < 1.3.0`
+- 脱字符（`^`）（允许小版本），`^1.2.3` 相当于 `>= 1.2.3 < 2.0.0`
+
+更多关于支持版本约束的细节解释参考 [Masterminds/semverMasterminds/semver](https://github.com/Masterminds/semver)
+
+### deprecated
+
+在 chart repository 里面管理 chart 的时候，有时候需要废弃一个 chart。`Chart.yaml` 里面的可选字段 `deprecated` 可以用来标记 chart 为废弃状态。如果 repository 中最新版本的 chart 被标记为废弃，那整个 chart 都会被认为已废弃。chart 名字可以重新发布一个新的版本并且不标记废弃。废弃 chart 的流程是这样：
+
+1. 更新 `Chart.yaml` 来标记 chart 为废弃，并更改版本
+2. 发布一个新的 chart 版本到 chart repository
+3. 从源代码仓库汇总删除这个 chart（比如 git）
 
 ### type
+
+type 字段定义了 chart 的类型。有两种类型 `application` 和 `library`。`application` 是默认的类型，它是标准的 chart，可以进行所有的操作。chart 库（`library` chart） 给 chart 构建者提供了程序和功能。chart 库和应用 chart 是不同的，因为 chart 库是不能安装的，所以通常不包含任何资源对象。
+
+注意：一个应用 chart 也可以被当成 chart 库。只需要设置 type 字段为 library 即可。这个 chart 就会被渲染成一个库 chart，所有的程序和功能都可以被使用。所有的资源对象都将不会被渲染。
+
+## LICENSE，README，NOTES
+
+chart 也可以包含安装，配置，使用和授权许可文件。
+
+`LICENSE` 是一个包含 chart 授权的纯文本文件。chart 里面包含一个许可，因为里面可能包含程序逻辑，而不仅仅只有配置。如果有必要的话，也可能会有单独的应用安装授权许可。
+
+`README` 是一个 markdown 格式的文件，通常会包含：
+
+- chart 提供的应用程序或者服务的描述
+- chart 运行所需要的先决条件和要求
+- `values.yaml` 中选项的描述和默认值
+- 任何其他可能和 chart 安装和配置相关的信息
+
+在 hub 或者其他用户界面显示的关于 chart 的详细信息都是来自于 `README.md` 文件的内容
+
+chart 也会包含一个短的文本文件 `templates/NOTES.txt`，这个文件会在安装之后或者查看 release 状态的时候打印。这个文件会被当成一个模板，可以用来展示使用说用，下一步，或者任何其他和 release 相关的信息。比如，连接数据库的指令，或者访问 web ui。因为这个文件在运行 `helm install` 或者 `helm status` 的时候输出到标准输出，建议保持这个文件的简短，并指向 README 文件获取更多细节。
+
+## chart 依赖
+
+在 helm 中，一个 chart 可以依赖任何数量的其他 chart。这些依赖可以通过 `Chart.yaml` 中的 `dependencies` 字段动态链接，或者放到 `charts` 目录中手动管理。
+
+### 使用 dependencies 字段管理依赖
+
+在 `dependencies` 字段里，当前 chart 依赖的其他 chart 会被定义成一个列表。
+
+```yaml
+dependencies:
+  - name: apache
+    version: 1.2.3
+    repository: https://example.com/charts
+  - name: mysql
+    version: 3.2.1
+    repository: https://another.example.com/charts
+```
+
+- `name` 字段是你需要的 chart 的名字
+- `version` 字段是你需要的 chart 版本
+- `repository` 字段是 chart repository 的 url 全路径。注意你也需要使用 `helm repo add` 添加这个 repo 到本地
+- 你可以使用 repo 的名字来替代 url
+
+```
+$ helm repo add fantastic-charts https://fantastic-charts.storage.googleapis.com
+```
+
+```yaml
+dependencies:
+  - name: awesomeness
+    version: 1.0.0
+    repository: "@fantastic-charts"
+```
+
+一旦你定义了依赖，你可以运行 `helm dependency update`，它会使用你的依赖文件来下载所有你指定的 chart 到 `charts/` 目录。
+
+```
+$ helm dep up foochart
+Hang tight while we grab the latest from your chart repositories...
+...Successfully got an update from the "local" chart repository
+...Successfully got an update from the "stable" chart repository
+...Successfully got an update from the "example" chart repository
+...Successfully got an update from the "another" chart repository
+Update Complete. Happy Helming!
+Saving 2 charts
+Downloading apache from repo https://example.com/charts
+Downloading mysql from repo https://another.example.com/charts
+```
+
+当 `helm dependency update` 拉取 chart 时，会在 `charts/` 目录保存他们的 chart 存档。所以上面的例子中，将在 `charts` 目录中看到如下文件：
+
+```
+charts/
+  apache-1.2.3.tgz
+  mysql-3.2.1.tgz
+```
+
+### dependencies 中的 alias 字段
+
+除了上面的字段之外，每一个依赖也会包含一个可选的字段 `alias`。
+
+增加一个依赖 chart 的别名，会使用别名作为新依赖的名称。
+
+在 chart 重名的情况下可以使用别名。
+
+```yaml
+# parentchart/Chart.yaml
+
+dependencies:
+  - name: subchart
+    repository: http://localhost:10191
+    version: 0.1.0
+    alias: new-subchart-1
+  - name: subchart
+    repository: http://localhost:10191
+    version: 0.1.0
+    alias: new-subchart-2
+  - name: subchart
+    repository: http://localhost:10191
+    version: 0.1.0
+```
+
+在上面的例子中，我们总共会得到 parentchart 的 3 个依赖项
+
+```
+subchart
+new-subchart-1
+new-subchart-2
+```
+
+手动实现这个的方式是多次使用不同的名字复制粘贴相同的 chart 到 `charts/` 目录。
+
+### dependencies 中的 tags 和 condition 字段
+
+除了上面的字段之外，每一个依赖也会包含可选字段 `tags` 和 `condition`。
+
+所有的 chart 默认都会加载。如果设置了 `tags` 和 `condition` 字段，它们将被计算并且用来控制它们应用的 chart 的加载。
+
+`condition` 字段包含一个或者多个 yaml 路径（使用逗号隔开）。如果在最上层的存在这个路径，并且被解析成布尔值，这个 chart 就会被启用或者禁用，取决于布尔值。只有找到列表中第一个有效的路径会被评估，并且如果所有的路径都不存在，这个条件也将无效。
+
+`tags` 字段是一个用来关联 chart 的 yaml 列表。最上层的值中，所有带 tag 的 chart 可以通过指定 tag 和布尔值来启用或者禁用。
+
+```yaml
+dependencies:
+  - name: subchart1
+    repository: http://localhost:10191
+    version: 0.1.0
+    condition: subchart1.enabled, global.subchart1.enabled
+    tags:
+      - front-end
+      - subchart1
+  - name: subchart2
+    repository: http://localhost:10191
+    version: 0.1.0
+    condition: subchart2.enabled,global.subchart2.enabled
+    tags:
+      - back-end
+      - subchart2
+```
+
+```yaml
+# parentchart/values.yaml
+
+subchart1:
+  enabled: true
+tags:
+  front-end: false
+  back-end: true
+```
+
+在上面的例子中，所有带有 `front-end` tag 的 chart 都会被禁用，但是因为 `subchart1.enabled` 这个路径计算结果为 `true`，这个条件会覆盖 `front-end` tag，`subchart1` 会被启用。
+
+由于 `subchart2` 带有 `back-end` 的 tag，并且这个 tag 计算结果为 `true`，`subchart2` 会被启用。同时注意尽管 `subchart2` 也指定了条件，但是上层的值中没有相应的路径和值，所以条件没有生效。
+
+#### 在客户端中使用 tags 和 condition
+
+`--set` 参数通常可以用来修改 tag 和 condition 的值
+
+```
+$ helm install --set tags.front-end=true --set subchart2.enabled=false
+```
+
+#### tags 和 condition 的解析
+
+- condition（在 values 中设置时）总是会覆盖 tag。第一个存在的 condition 路径赢了，其他的会被忽略。
+- tags 在计算的时候会被当做“任何一个 chart 的 tag 为 true 时，启用 chart”
+- tags 和 condition 的值必须在最上层设置
+- tags 键必须在 values 的最顶层。全局和内嵌的 tags 目前还不支持
+
+### 通过依赖项导入子值
+
+在一些场景中，需要允许子 chart 的值冒泡到父 chart 中，并且共享同样的默认值。使用 `export` 格式的另一个好处是，它能使用未来的工具检查用户设置的值。
+
+包含被到处值的 key 可以在父 chart 的 dependencies 的 import-values 中使用 yaml 列表指定。列表中的每条都是一个从子 chart 的 `exports` 字段导入的键
+
+为了导入没有在 `exports` 中的键，使用 `child-parent` 格式。两中格式的例子如下。
+
+#### 使用 exports 格式
+
+如果一个字 chart 的 `values.yaml` 文件在根目录下包含了 `exports` 字段，它的内容就能直接导入到父 chart 的 values 中，通过指定 `import-values` 即可，如下面的例子：
+
+```yaml
+# parent's Chart.yaml file
+
+dependencies:
+  - name: subchart
+    repository: http://localhost:10191
+    version: 0.1.0
+    import-values:
+      - data
+```
+
+```yaml
+# child's values.yaml file
+
+exports:
+  data:
+    myint: 99
+```
+
+因为我们指定了 `data` 这个键在我们的导入列表中，helm 在子 chart 的 `exports` 字段中查找 `data` 键，并导入它的内容。
+
+请注意父键 `data` 并没有在父 chart 的最终 values 中包含。如果你需要指定父 chart 的键，使用 `child-parent` 格式。
+
+#### 使用 child-parent 格式
+
+为了访问没有包含在 `exports` 中的子 chart values 中的键，你需要指定需要被导入的源键和在父 chart values 中的目标路径。
+
+`import-values` 在下面这个例子中，指示 helm 使用任何在子 chart values 找到的 `child` 路径，拷贝他们到父 chart values `parent` 路径。
+
+```
+# parent's Chart.yaml file
+
+dependencies:
+  - name: subchart1
+    repository: http://localhost:10191
+    version: 0.1.0
+    ...
+    import-values:
+      - child: default.data
+        parent: myimports
+```
+
+在上面的例子中，subchart1 的 values 中的 `default.data` 会被导入到父 chart values 的 myimports 键，细节如下：
+
+```
+# parent's values.yaml file
+
+myimports:
+  myint: 0
+  mybool: false
+  mystring: "helm rocks!"
+```
+
+```
+# subchart1's values.yaml file
+
+default:
+  data:
+    myint: 999
+    mybool: true
+```
+
+父 chart 的结果会是：
+
+```
+# parent's final values
+
+myimports:
+  myint: 999
+  mybool: true
+  mystring: "helm rocks!"
+```
+
+父 chart 最终的 values 现在包含了从 subchart1 导入的 `myint` 和 `mybool` 字段。
+
+### 通过 charts/ 目录手动管理依赖
+
+如果需要更多对依赖的控制，可以通过拷贝这些依赖的 chart 到 `charts/` 目录来显示的表示这些依赖。
+
+依赖应该是未压缩的 chart 目录，但是他的名字不能以 `_` 或者 `.` 开头，这些文件会被 chart 加载器忽略。
+
+举个例子，如果 wordpress chart 依赖了 apache chart，那 apache chart（版本正确）会在 wordpress chart 的 `charts` 目录被提供。
+
+```
+wordpress:
+  Chart.yaml
+  # ...
+  charts/
+    apache/
+      Chart.yaml
+      # ...
+    mysql/
+      Chart.yaml
+      # ...
+```
+
+上面这个例子展示了 wordpress 如何表示它对 apache 和 mysql 的依赖，通过在 `charts/` 目录中包含这些 chart。
+
+提示：要讲依赖放入 `chart/` 目录，使用 `helm pull` 命令
+
+### 使用依赖的操作部分
+
+上面的章节解释了如何指定一个 chart 的依赖，但是这个如何影响 chart 的安装，在使用 `helm install` 和 `helm upgrade` 的时候。
+
+假设一个名为 A 的 chart 创建了如下的 kubernetes 对象
+
+- namespace "A-Namespace"
+- statefulset "A-StatefulSet"
+- service "A-Service"
+
+此外，A 依赖于 chart B，B 创建了对象
+
+- namespace "B-Namespace"
+- replicaset "B-ReplicaSet"
+- service "B-Service"
+
+在 chart A 安装/升级后，一个 helm release 就被创建/修改了。这个 release 会创建/更新所有上面的 kuberenetes 对象，按照如下的顺讯：
+
+- A-Namespace
+- B-Namespace
+- A-Service
+- B-Service
+- B-ReplicaSet
+- A-StatefulSet
+
+这是因为当 helm 安装/升级 chart 的时候，来自 chart 和它的依赖的 chart 的 kubernetes 对象是
+
+- 聚合到一个集合；然后
+- 按类型和名称排序；然后
+- 按顺序创建/跟新。
+
+因此一个 release 被创建了，包括 chart 以及它的依赖的 chart 的所有的对象。
+
+kubernetes 类型的安装顺序是由 InstallOrder 的枚举来给出，包含在 [kind_sorter.go](https://github.com/helm/helm/blob/484d43913f97292648c867b56768775a55e4bba6/pkg/releaseutil/kind_sorter.go) 中。
+
+## 模板和值
+
+helm chart 模板使用 go 模板语法编写，新增了 50 个左右的附加功能，包括[Sprig 库](https://github.com/Masterminds/sprig)，和其他一些[特殊的功能](https://helm.sh/docs/howto/charts_tips_and_tricks/)
+
+所有的模板文件保存在 chart 的 `templates/` 目录。当 helm 渲染 chart 时，它将目录中的每一个文件传递给模板引擎。
+
+模板的值由下面两种方式提供：
+
+- chart 开发者会在 chart 里面提供一个叫做 `values.yaml` 的文件。这个文件包含了默认的值。
+- chart 用户可以自己提供一个包含值的 yaml 文件。这个文件可以在命令行中通过 `helm install` 提供
+
+当一个用户提供了自定义的值，这些值会覆盖 chart 中 `values.yaml` 文件中的值
+
+### 模板文件
+
+模板文件遵循 go 模板的标准约定（查看[text/template 文档](https://golang.org/pkg/text/template/)了解更多）。一个模板的文件的例子看起来可能是这样：
+
+```yaml
+apiVersion: v1
+kind: ReplicationController
+metadata:
+  name: deis-database
+  namespace: deis
+  labels:
+    app.kubernetes.io/managed-by: deis
+spec:
+  replicas: 1
+  selector:
+    app.kubernetes.io/name: deis-database
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: deis-database
+    spec:
+      serviceAccount: deis-database
+      containers:
+        - name: deis-database
+          image: {{ .Values.imageRegistry }}/postgres:{{ .Values.dockerTag }}
+          imagePullPolicy: {{ .Values.pullPolicy }}
+          ports:
+            - containerPort: 5432
+          env:
+            - name: DATABASE_STORAGE
+              value: {{ default "minio" .Values.storage }}
+```
+
+上面这个例子，大致基于 <https://github.com/deis/charts>，是一个 kubernetes 副本控制器模板。它可以使用下面四个模板值（通常在 `values.yaml` 文件中定义）：
+
+- `imageRegistry`：docker 镜像仓库
+- `dockerTag`：docker 镜像 tag
+- `pullPolicy`：kubernetes 的镜像拉取策略
+- `storage`：存储后端，默认是 "minio"
+
+所有这些值都有模板作者定义。helm 不需要也不规定这些参数。
+
+要了解更多工作的 chart，请查阅 CNCF [Artifact Hub](https://artifacthub.io/packages/search?kind=0)。
+
+### 预定义值
+
+通过 values.yaml 文件提供（或者通过 --set 参数）的 values ，在模板中通过 .Values 对象来访问。但是也有其他一些预定义你可以在模板中访问的数据。
+
+这些值是预定义的，在每个模板中都可用，并且不能被覆盖。和所有值一样，名字是大小写铭感的。
+
+- Release.Name：release 的名字（不是 chart）
+- Release.Namespace：和 chart 相关的命名空间。
+- Release.Service：进行发布的服务。
+- Release.IsUpgrade：如果当前操作是更新或者回滚操作，这个值会被设置成 true
+- Release.IsInstall：如果当前操作是安装操作，这个值会被设置成 true
+- Chart：`Chart.yaml` 的内容。因此 chart 版本可以通过 `Chart.Version` 来获取，维护者在 `Chart.Maintainers` 中。
+- Files: 类似 map 的对象，包含了 chart 中所有非特殊的文件。你不能访问模板，但是可以访问其他文件（除非它们是被 .helmignore 排除的）。文件可以使用 `{{ index .Files "file.name" }}` 或者 `{{ .Files.Get name }}` 功能来访问。你也可以使用 `{{ .Files.GetBytes }}` 以 `[]byte` 的方式来访问文件的内容。
+- Capabilities：类似 map 的对象，包含了 kubernetes 的版本信息（`{{ .Capabilities.KubeVersion }}`）以及支持的 kubernetes api 版本（`{{ .Capabilities.APIVersions.Has "batch/v1" }}`）。
+
+注意：`Chart.yaml` 中任何位置的字段都会被丢弃。它们不能在 `Chart` 对象中访问。因此，`Chart.yaml` 不能用来传递任意结构化的数据到模板中。不过，values 文件可以用来做这个事情。
