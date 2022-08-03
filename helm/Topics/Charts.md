@@ -522,3 +522,334 @@ spec:
 - Capabilities：类似 map 的对象，包含了 kubernetes 的版本信息（`{{ .Capabilities.KubeVersion }}`）以及支持的 kubernetes api 版本（`{{ .Capabilities.APIVersions.Has "batch/v1" }}`）。
 
 注意：`Chart.yaml` 中任何位置的字段都会被丢弃。它们不能在 `Chart` 对象中访问。因此，`Chart.yaml` 不能用来传递任意结构化的数据到模板中。不过，values 文件可以用来做这个事情。
+
+### values 文件
+
+回顾一下前面章节关于模板的介绍，`values.yaml` 文件提供了必要的值，就像这样：
+
+```yaml
+imageRegistry: "quay.io/deis"
+dockerTag: "latest"
+pullPolicy: "Always"
+storage: "s3"
+```
+
+values 文件的格式是 yaml。chart 会包含一个默认的 values.yaml 文件。helm 安装命令允许用户提供一个额外的 yaml 值文件来覆盖原来的值。
+
+```
+$ helm install --generate-name --values=myvals.yaml wordpress
+```
+
+values 通过这种方式传递的时候，它们将会和默认值合并。举个例子，`myvals.yaml` 文件内容如下：
+
+```yaml
+storage: "gcs"
+```
+
+当它在 chart 中和 `values.yaml` 合并的时候，生成的结果内容会是：
+
+```yaml
+imageRegistry: "quay.io/deis"
+dockerTag: "latest"
+pullPolicy: "Always"
+storage: "gcs"
+```
+
+注意只有最后一个字段被覆盖了。
+
+注意：chart 中的默认值文件必须命名为 `values.yaml`，但是在命令行中指定的文件可以是任意名字
+
+注意：如果在 `helm install` 或者 `helm upgrade` 中使用了 `--set` 参数，这些值会在客户端侧简单地转换成 yaml。
+
+注意：如果 values 文件中存在任意必要的条目，他们可以在 chart 模板中使用 `required` 方法来生命成必要的。
+
+这里所有值都可以通过 `.Values` 对象在模板中被访问到。
+
+```yaml
+apiVersion: v1
+kind: ReplicationController
+metadata:
+  name: deis-database
+  namespace: deis
+  labels:
+    app.kubernetes.io/managed-by: deis
+spec:
+  replicas: 1
+  selector:
+    app.kubernetes.io/name: deis-database
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: deis-database
+    spec:
+      serviceAccount: deis-database
+      containers:
+        - name: deis-database
+          image: {{ .Values.imageRegistry }}/postgres:{{ .Values.dockerTag }}
+          imagePullPolicy: {{ .Values.pullPolicy }}
+          ports:
+            - containerPort: 5432
+          env:
+            - name: DATABASE_STORAGE
+              value: {{ default "minio" .Values.storage }}
+```
+
+### 作用域，依赖，和值
+
+values 文件可以为顶层 chart 申明值，同样也可以为任何包含在 chart 的 `charts/` 目录中子 chart 申明值。或者，换个说法，一个 values 文件可以同时给 chart 和任何它的依赖提供值。举个例子，上面示范的 wordpress chart 有 `mysql` 和 `apache` 两个依赖。values 文件可以给所有的组件提供值：
+
+```
+title: "My WordPress Site" # Sent to the WordPress template
+
+mysql:
+  max_connections: 100 # Sent to MySQL
+  password: "secret"
+
+apache:
+  port: 8080 # Passed to Apache
+```
+
+更高的层级的 chart，可以访问所有下面变量。所有 wordpress chart 可以通过 `.Values.mysql.password` 访问 MySQL 的密码。但是低层级的 chart 无法访问父 chart 的任何东西，所以 mysql 无法访问 `title` 属性。同样的问题，也不能访问 `apache.port`。
+
+values 是就是命名空间，但是命名空间是可以精简的。所以对于 wordpress chart，他可以通过 `.Values.mysql.password` 访问 mysql 的密码字段。但是对于 mysql chart，values 的作用域已经被缩小了，并且命名空间的前缀也被移除了，所以它看到的密码字段仅仅是 `.Values.password`。
+
+### 全局值
+
+在 2.0.0-Alpha.2 之后，helm 支持特殊的 `global` 值。考虑前面例子的修改版本：
+
+```yaml
+title: "My WordPress Site" # Sent to the WordPress template
+
+global:
+  app: MyWordPress
+
+mysql:
+  max_connections: 100 # Sent to MySQL
+  password: "secret"
+
+apache:
+  port: 8080 # Passed to Apache
+```
+
+上面添加了一个 `global` 的章节，附带值 `app:MyWordPress`。这个值在所有的 chart 中都可以通过 `.Values.global.app` 来引用。
+
+举个例子，mysql 模板可以通过 `{{ .Values.global.app }}` 来访问 `app`，`apache` chart 也一样。事实上，上面的 values 文件会被重新生成成这样：
+
+```yaml
+title: "My WordPress Site" # Sent to the WordPress template
+
+global:
+  app: MyWordPress
+
+mysql:
+  global:
+    app: MyWordPress
+  max_connections: 100 # Sent to MySQL
+  password: "secret"
+
+apache:
+  global:
+    app: MyWordPress
+  port: 8080 # Passed to Apache
+```
+
+这提供了一种共享顶层变量到所有子 chart 的方式，这在一些事情比如设置类似标签这样的 `metadata` 属性的时候很有用。
+
+如果子 chart 声明了一个全局变量，这个全局变量会向下传递（到子 chart 的子 chart），但是不会向上传递到父 chart。子 chart 是没有办法影响父 chart 的值的。
+
+同样，父 chart 的全局变量由于子 chart 的全局变量。
+
+### 模式文件
+
+有时候，chart 的维护者可以想要定义一个他们值的结构。这个可以通过在 `values.scheme.json` 中定义一个模式来实现。一个模式使用 [json schema](https://json-schema.org/) 来表示。它看起来像这样：
+
+```json
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "properties": {
+    "image": {
+      "description": "Container Image",
+      "properties": {
+        "repo": {
+          "type": "string"
+        },
+        "tag": {
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "name": {
+      "description": "Service name",
+      "type": "string"
+    },
+    "port": {
+      "description": "Port",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "protocol": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "protocol",
+    "port"
+  ],
+  "title": "Values",
+  "type": "object"
+}
+```
+
+这个模式可以被应用到值中去校验。当任何下面的命令被调用时，校验会发生：
+
+- `helm install`
+- `helm upgrade`
+- `helm lint`
+- `helm template`
+
+一个满足这个模式要求的 `values.yaml` 文件的例子看起来像这样：
+
+```yaml
+name: frontend
+protocol: https
+port: 443
+```
+
+注意这个模式被应用到最终的 `.Values` 对象中，而不仅仅是 `values.yaml` 文件。这就意味着下面的 yaml 文件，在 chart 被安装时附带合适的 `--set` 选项时，也是有效的。
+
+```yaml
+name: frontend
+protocol: https
+```
+
+```
+helm install --set port=443
+```
+
+此外，最终的 `.Values` 对象会被所有的子 chart 模式检查。这意味子 chart 中的限制是无法在父 chart 中绕过的。反过来，如果子 chart 的 `values.yaml` 不满足要求，父 chart 必须满足这些限制才有效。
+
+### 参考
+
+在编写模板，值，以及模式文件的时候，这里有一些标准的参考可以帮助你。
+
+- [Go 模板](https://godoc.org/text/template)
+- [额外的模板方法](https://godoc.org/github.com/Masterminds/sprig)
+- [yaml 格式](https://yaml.org/spec/)
+- [JSON Schema](https://json-schema.org/)
+
+## 自定义资源定义（CRDs）
+
+kubernetes 提供了一种声明新对象的机制。使用 `CustomResouceDefinition` （CRDs），kubenetes 开发者可以自定义资源类型。
+
+在 helm 3 中，CRDs 被当成一种特殊的对象。他们最先被安装，并且收到一些限制。
+
+CRD yaml 文件应该放到 chart 的 crds 目录下面。多个 CRD（通过 yaml 的开始和结束标记分开） 可以放到同一个文件中。helm 会尝试加载 crd 目录下的所有文件到 kubernetes 中。
+
+crd 文件不能是模板。他们必须是纯 yaml 文档。
+
+当 helm 安装一个新的 chart，它会上传 CRDs，暂停直到 CRDs 可以被 API 服务使用，然后开启模板引擎，渲染剩下的 chart，并且上传到 kuberntes 中。因为这个顺序，CRD 的信息在 `.Capabilities` 对象在模板中是可用的，并且 helm 模板会创建新的在 CRDs 中申明的对象实例。
+
+举个例子，如果你 chart 在 `crds` 目录中有一个 `CronTab` 的 CRD，你可以在 `templates/` 目录中创建一个 `CronTab` 的实例：
+
+```yaml
+crontabs/
+  Chart.yaml
+  crds/
+    crontab.yaml
+  templates/
+    mycrontab.yaml
+```
+
+`crontab.yaml` 文件必须包含没有模板指令的 CRD：
+
+```yaml
+kind: CustomResourceDefinition
+metadata:
+  name: crontabs.stable.example.com
+spec:
+  group: stable.example.com
+  versions:
+    - name: v1
+      served: true
+      storage: true
+  scope: Namespaced
+  names:
+    plural: crontabs
+    singular: crontab
+    kind: CronTab
+```
+
+然后模板文件 `mycrontab.yaml` 会创建创建一个新的 `CronTab`（通常使用模板）：
+
+```yaml
+apiVersion: stable.example.com
+kind: CronTab
+metadata:
+  name: {{ .Values.name }}
+spec:
+   # ...
+```
+
+helm 会保证 `CronTab` 类型已经被安装，并且在安装 `templates/` 里面的东西之前，可以通过 kubernetes API 服务使用。
+
+### CRDs 的限制
+
+和大多数 kuberntes 里面的对象不一样，CRDs 的安装是全局的。因此，helm 用了一个非常谨慎的方法来管理 CRD。CRD 有如下限制：
+
+- CRD 从不重新安装。如果 helm 确定 `crds` 目录中的 CRD 已经存在（不管版本），helm 都将不会尝试安装或者更新。
+- CRD 在更新和回滚的时候从不安装。helm 只会在安装操作的时候创建 CRD。
+- CRD 从不删除。删除 CRD 的时候会自动删除集群中所有命名空间下的 CRD 内容。所以 helm 不会删除 CRD。
+
+操作人员如果想要更新或者删除 CRD，建议手动操作，并且要非常小心。
+
+## 使用 helm 来管理 chart
+
+helm 工具有几个命令来处理 chart。
+
+它可以为你创建一个新的 chart：
+
+```
+$ helm create mychart
+Created mychart/
+```
+
+一旦你已经编辑了一个 chart，`helm` 可以为你打包成一个 chart 归档：
+
+```
+$ helm package mychart
+Archived mychart-0.1.-.tgz
+```
+
+你也可以用 helm 来帮助你找到 chart 中的格式或者消息的问题
+
+```
+$ helm lint mychart
+No issues found
+```
+
+## chart repository
+
+chart repository 是一个 http 服务，存储一个或多个打包的 chart。helm 可以管理本地的 chart，而如果要共享 chart，更好地机制是 chart repository。
+
+任何可以 http 服务器，只要可以服务 yaml 和 tar 文件，并且回复 GET 请求，都可以作为一个 chart 仓库服务器。helm 团队已经测试过了一些服务，包括开启网站模式的 Google Cloud Storage，以及开启网站模式的 S3 服务。
+
+一个 respository 的主要特征是存在特殊的叫做 `index.yaml` 文件，它列出了所有 repository 提供的包，以及允许检索和校验这些包的元数据。
+
+在客户端侧，respository 由 `helm repo` 命令来管理。然而，helm 没有提供工具来上传 chart 到远端的 repository 服务器。这是因为这样做会增加大量需求来实现一个服务器，从而增加建立一个 repository 的阻碍。
+
+## chart 初始包
+
+`helm create` 命令提供了一个可选 `--starter` 选项来让你指定一个初始包（`starter chart`）。
+
+初始包只是一个普通的 chart，只是位于 `$XDG_DATA_HOME/helm/starters`。作为一个 chart 开发者，你可以编写专门设计用于初始化的 chart。这种 chart 的设计应该考虑如下因素：
+
+- `Chart.yaml` 可以被生成器覆盖。
+- 用户期望修改这个 chart 的内容，所以文档需要说明用户如何修改。
+- 任何 `<CHARTNAME>` 出现的地方都会被替换成特定的 chart 名字，以便初始化包可以用于模板
+
+目前唯一添加一个初始化 chart 的方式是，手动拷贝它到 `$XDG_DATA_HOME/helm/starters` 目录。在你的 chart 文档中，你可能想要需要这个过程。
+
+## 链接
+
+- Charts: <https://helm.sh/docs/topics/charts/>
